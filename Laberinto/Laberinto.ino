@@ -1,4 +1,32 @@
-#include "Laberinto.h"
+//////////////////////////////////////////LIBRERIAS//////////////////////////////////////////////////////////////////////////////////////////////////
+#include <FlexiTimer2.h>
+
+//////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
+//Constantes del algoritmo
+//const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
+const unsigned long INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
+const byte SEMI_PER_EXCITACION = 50; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
+                                     //cuadrada, generada localmente, que se aplica en las entradas de referencia (r). Tiempo: 50mS.
+const unsigned long VEL_COM_SERIE = 115200;
+const unsigned int NUM_FLANCOS_VUELTA = 16; //Cantidad de flancos efectivos por vuelta, es decir flancos que producen interrupciones.
+                                            //Esto depende de la configuracion de las interrupciones del micro.
+const float ZONA_MUERTA = 4.0; //Zona muerta del motor tomando el valor absoluto de la tension de alimentacion.
+                                //En realidad la zona muerta es ±4v.
+const float TOLERANCIA = 0.1; //Tolerancia para el control de la velocidad de las rueda, 0.1m/s. Este valor debería ser definido
+                              //considerando que el hecho de que exista una diferencia en las velocidades de las ruedas producira
+                              //una desviacion lateral (giro) del robot mientras este intenta moverse en linea recta, lo cual
+                              //podria producir el impacto del mismo contra las paredes del laberinto si el valor no es elegido
+                              //correctamente.
+const float TENSION_MAX = 11.1; //Nuestro motor es de 18V, 11 Ohm y 8800RPM
+const float VEL_LIN_MAX = 1.0; //velocidad lineal maxima (m/s) permitida para ambos motores
+
+//Pines
+const unsigned int PIN_ENCODER_LEFT = 2;
+const unsigned int PIN_ENCODER_RIGHT = 3;
+const unsigned int PIN1_MOTOR_LEFT = 5;
+const unsigned int PIN2_MOTOR_LEFT = 6;
+const unsigned int PIN1_MOTOR_RIGHT = 9;
+const unsigned int PIN2_MOTOR_RIGHT = 10;
 
 //////////////////////////////////////////VARIABLES GLOBALES//////////////////////////////////////////////////////////////////////////////////////////
 //Contadores de los flancos efectivos (aquellos que producen interrupciones) de los encoder.
@@ -8,6 +36,10 @@ unsigned int flancos_right = 0;
 //Flancos efectivos contados por los encoder en un determinado lapso de tiempo, el intervalo de muestreo.
 unsigned int total_flancos_left = 0;  
 unsigned int total_flancos_right = 0;
+
+//Contador de milisegundos que permite ejecutar el Excitador (funcion), cada un cierto tiempo mayor
+//al intervalo de muestreo
+byte cont = SEMI_PER_EXCITACION;
 
 //Parametros del PID del lazo de control L y referencia
 float kp_left = 0.0, ki_left = 0.0, td_left = 0.0; //Parametros del PID
@@ -22,6 +54,7 @@ char buffer[100];
 
 ///////////////////////////////////////////////FLAGs////////////////////////////////////////////////////////////////////////////////////////////////////
 boolean flag_control = false;
+boolean flag_excitador = false;
 
 ///////////////////////////////////////////////SETUP////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(){
@@ -67,9 +100,15 @@ void loop(){
     
     flag_control = false;
   }
+
+  if (flag_excitador = true){
+    Excitador(r_left, r_right);
+
+    flag_excitador = false;
+  }
 }
 
-/////////////////////////////////////////////////////////RUTINAS DE SERVICIO/////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////RUTINAS DE SERVICIO////////////////////////////////////////////////////////////////////////////
 void RS_ENCODER_LEFT() {    
   flancos_left++ ;
 }
@@ -86,9 +125,34 @@ void RS_TIMER2() {
   flancos_right = 0;
 
   flag_control = true;
+
+  cont--;
+  if (cont == 0){
+    cont = SEMI_PER_EXCITACION;
+    flag_excitador=true;
+  }
 }
 
-////////////////////////////////////////////////////////////////////FUNCIONES///////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////FUNCIONES//////////////////////////////////////////////////////////////////////////////
+//Funcion que se encarga de generar una señal cuadrada para excitar ambos lazo de control (excitacion local) y asi poder calibrar los PIDs de los mismos. 
+//La señal cuadrada se conecta a las entradas de referencia de ambos lazos (setpoints). Esta señal tiene un semiperiodo mucho mayor que el intervalo de muestreo,
+//de modo que luego de que se produzca un flanco (cambio de setpoint) los lazos tengan suficiente tiempo para reducir los errores y estabilizar las salidas 
+//de los mismos (velocidades).
+inline void Excitador(float& r_left, float& r_right){ //r_left y r_right son referencias (punteros constantes que se de-referencian automáticamente, muy usado en C++).
+  if (r_left==0){
+    r_left = VEL_LIN_MAX;
+  }else{
+    r_left = 0;
+  }
+
+  if (r_right==0){
+    r_right = VEL_LIN_MAX;
+  }else{
+    r_right = 0;
+  }
+}
+
+
 inline float CalcVelLeft(){
   float vel_angular_left = 0.0; //velocidad angular de las rueda izquierda
   float vel_lineal_left = 0.0; //velocidad lineal de la rueda izquierda
