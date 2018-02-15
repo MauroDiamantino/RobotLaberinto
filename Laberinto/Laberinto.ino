@@ -1,24 +1,38 @@
 //////////////////////////////////////////LIBRERIAS//////////////////////////////////////////////////////////////////////////////////////////////////
 #include <FlexiTimer2.h>
 
+//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les ha asignado un atributo para forzar al compilador a
+//respetar esta directiva
+inline void Excitador(float&, float&) __attribute__((always_inline));
+//inline void ParserParametroPID(String&, float&, const String) __attribute__((always_inline));
+inline float CalcVelLeft() __attribute__((always_inline));
+inline float CalcVelRight() __attribute__((always_inline));
+inline void ActuadorLeft(float) __attribute__((always_inline));
+inline void ActuadorRight(float) __attribute__((always_inline));
+inline void ControlMotorLeft(float) __attribute__((always_inline));
+inline void ControlMotorRight(float) __attribute__((always_inline));
+
 //////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
-//Constantes del algoritmo
 //const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
-const unsigned long INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
-const byte SEMI_PER_EXCITACION = 50; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
+const unsigned int INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
+const byte SEMI_PER_EXCITACION = 100; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
                                      //cuadrada, generada localmente, que se aplica en las entradas de referencia (r). Tiempo: 50mS.
+const unsigned int INT_CAMBIO_PARAM = 2000; //Intervalo de tiempo (en mS) de cambio de los parametreos de los controldadores PID. El micro debe revisar
+                                            //el buffer de entrada serie cada vez que se cumple este intervalo de tiempo y actualizar los parametros de los
+                                            //PIDs si se han enviado nuevos valores.
+                                     
 const unsigned long VEL_COM_SERIE = 115200;
-const unsigned int NUM_FLANCOS_VUELTA = 16; //Cantidad de flancos efectivos por vuelta, es decir flancos que producen interrupciones.
-                                            //Esto depende de la configuracion de las interrupciones del micro.
-const float ZONA_MUERTA = 4.0; //Zona muerta del motor tomando el valor absoluto de la tension de alimentacion.
-                                //En realidad la zona muerta es ±4v.
+const unsigned int NUM_FLANCOS_VUELTA = 16; //Cantidad de flancos efectivos de las señales de los encoders por cada vuelta de una reuda, es decir cantidad de
+                                            //flancos por vuelta que producen interrupciones. Esto depende de la configuracion de las interrupciones del micro.
+const float ZONA_MUERTA = 4.0; //Zona muerta de los motor, solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
 const float TOLERANCIA = 0.1; //Tolerancia para el control de la velocidad de las rueda, 0.1m/s. Este valor debería ser definido
                               //considerando que el hecho de que exista una diferencia en las velocidades de las ruedas producira
                               //una desviacion lateral (giro) del robot mientras este intenta moverse en linea recta, lo cual
                               //podria producir el impacto del mismo contra las paredes del laberinto si el valor no es elegido
                               //correctamente.
-const float TENSION_MAX = 11.1; //Nuestro motor es de 18V, 11 Ohm y 8800RPM
-const float VEL_LIN_MAX = 1.0; //velocidad lineal maxima (m/s) permitida para ambos motores
+const float TENSION_MAX = 11.1; //Los motores tienen las siguientes caracteristicas: 18V, 11 Ohm y 8800RPM.
+const float VEL_LIN_MAX = 1.0; //Velocidad lineal maxima (m/s) permitida para ambos motores.
+const float RADIO_RUEDA = 0.03; //Radio de la ruedas en metros. Este es de 3cm, es decir 0.03m.
 
 //Pines
 const unsigned int PIN_ENCODER_LEFT = 2;
@@ -37,24 +51,31 @@ unsigned int flancos_right = 0;
 unsigned int total_flancos_left = 0;  
 unsigned int total_flancos_right = 0;
 
-//Contador de milisegundos que permite ejecutar el Excitador (funcion), cada un cierto tiempo mayor
-//al intervalo de muestreo
-byte cont = SEMI_PER_EXCITACION;
+//Contadores de tiempo (la resolucion es el intervalo de muestreo) que permiten ejecutar determinadas funciones 
+//cada ciertos intervalos de tiempo mayores al intervalo de muestreo.
+byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador
+unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
+                                              //deberia ser inicializado con INT_CAMBIO_PARAM, debido a que esa constante representa el intervalo de tiempo cada 
+                                              //cuanto se debe revisar el buffer serie para actualizar los parametros de los PIDs. Sin embargo, al inicializarlo 
+                                              //con este valor diferente se busca generar un desfasaje con respecto a la fucion Excitador, para evitar la 
+                                              //sobrecarga del micro.
 
 //Parametros del PID del lazo de control L y referencia
-float kp_left = 0.0, ki_left = 0.0, td_left = 0.0; //Parametros del PID
+float kp_l = 0.0, ki_l = 0.0, td_l = 0.0; //Parametros del PID
 float r_left = 0.0; //velocidad lineal de referencia (m/s)
-                      
+
 //Parametros del PID del lazo de control L y referencia
-float kp_right = 0.0, ki_right = 0.0, td_right = 0.0; //Parametros del PID
+float kp_r = 0.0, ki_r = 0.0, td_r = 0.0; //Parametros del PID
 float r_right = 0.0; //velocidad lineal de referencia (m/s)
 
 //Buffer de la comunicacion serie
-char buffer[100];
+//char buffer_serie[100];
+String buffer_serie;
 
 ///////////////////////////////////////////////FLAGs////////////////////////////////////////////////////////////////////////////////////////////////////
 boolean flag_control = false;
 boolean flag_excitador = false;
+boolean flag_parser = false;
 
 ///////////////////////////////////////////////SETUP////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(){
@@ -101,10 +122,25 @@ void loop(){
     flag_control = false;
   }
 
-  if (flag_excitador = true){
+  if (flag_excitador == true){
     Excitador(r_left, r_right);
 
     flag_excitador = false;
+  }
+
+  if (flag_parser == true){
+    if (Serial.available()!=0){
+      while (Serial.available()!=0){  buffer_serie += Serial.read();  }
+      buffer_serie.toLowerCase();
+      ParserParametroPID(buffer_serie, kp_l, "kp_l");
+      ParserParametroPID(buffer_serie, ki_l, "ki_l");
+      ParserParametroPID(buffer_serie, td_l, "td_l");
+      ParserParametroPID(buffer_serie, kp_r, "kp_r");
+      ParserParametroPID(buffer_serie, ki_r, "ki_r");
+      ParserParametroPID(buffer_serie, td_r, "td_r");
+    }
+    
+    flag_parser = false;
   }
 }
 
@@ -126,10 +162,16 @@ void RS_TIMER2() {
 
   flag_control = true;
 
-  cont--;
-  if (cont == 0){
-    cont = SEMI_PER_EXCITACION;
+  cont_excitador--;
+  if (cont_excitador==0){
+    cont_excitador = SEMI_PER_EXCITACION;
     flag_excitador=true;
+  }
+
+  cont_parser--;
+  if (cont_parser==0){
+    cont_parser = INT_CAMBIO_PARAM;
+    flag_parser = true;
   }
 }
 
@@ -153,15 +195,60 @@ inline void Excitador(float& r_left, float& r_right){ //r_left y r_right son ref
 }
 
 
+void ParserParametroPID(String& buffer_serie, float& param, const String nombre_param){
+  //Constantes
+  const unsigned int LONG_SUBSTRING = 5; //Longitud del substring a buscar. Este contiene 4 caracteres correspondientes
+                                        //al nombre del parametro en cuestion (todos los parametros tienen nombres con la misma
+                                        //longitud) y ademas el caracter de asignacion '='
+  const String aux2 = nombre_param + '='; //Se utiliza para formar el string a buscar en el buffer
+  
+  //Variables
+  unsigned int num_chars; //Numero de caracteres en el buffer de entrada serie
+  boolean flag_encontrado = false; //Flag que indica si el parametro fue hallado en el buffer o no
+  unsigned int i = 0; //Indice de posicion
+  String aux1 = ""; //Se utiliza para obtener el substring que representa el valor numerico del parametro
+  unsigned int pos_inicial; //Almacena la posicion en el buffer a partir de la cual esta el parametro buscado,
+                            //si fue hallado
+  unsigned int cont; //Contador de caracteres a borrar en el buffer, una vez que se encuentra un parametro y 
+                     //se extrae su valor numerico
+
+  num_chars = buffer_serie.length();
+
+  ////Busqueda del parametro en el string////
+  //Lazo de busqueda
+  while ( flag_encontrado==false && i<=(num_chars-LONG_SUBSTRING) ){
+    if ( buffer_serie.substring(i,i+LONG_SUBSTRING)==aux2 ){  flag_encontrado = true; }
+    i++;
+  }
+  i--;
+  
+  //Obtencion del valor del parametro, si este fue hallado
+  if (flag_encontrado==true){
+    pos_inicial= i; //Se almacena la posicion donde comienza el nombre del parametro
+    i+=LONG_SUBSTRING; //Se hace avanzar el indice hasta la posicion donde empieza el valor numerico del parametro
+    //Lazo de obtencion del valor numerico
+    while ( buffer_serie[i]!=',' && buffer_serie[i]!=';' ){ 
+      aux1+=buffer_serie[i];
+      i++;
+    }
+    param = aux1.toFloat();
+
+    //Borrado del parametro y su valor del buffer de entrada serie
+    cont = i-pos_inicial+1; //Cantidad de caracteres a remover
+    buffer_serie.remove(pos_inicial, cont);
+  }
+}
+
+//Funcion que calcula la velocidad lineal de la rueda izquierda y retorna su valor
 inline float CalcVelLeft(){
   float vel_angular_left = 0.0; //velocidad angular de las rueda izquierda
   float vel_lineal_left = 0.0; //velocidad lineal de la rueda izquierda
-  //no se obtiene mejora si se usa el tipo de dato 'double' por la placa que se esta usando
+  //No se obtiene mejora si se usa el tipo de dato 'double' por la placa que se esta usando
   
   //Calculo de la velocidad lineal del motor izquierdo. Esta es la variable a controlar en el lazo de control L (y_left).
   vel_angular_left = ( (total_flancos_left/NUM_FLANCOS_VUELTA)*2.0*PI / (INT_MUESTREO/1000.0) );// La velocidad angular esta en rad/s. Se divide el intervalo de 
                                                                                               //muestreo en 1000 porque esta en milisegundos
-  vel_lineal_left = vel_angular_left*0.03; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda (3cm, es decir 0.03m)
+  vel_lineal_left = vel_angular_left*RADIO_RUEDA; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda
   
   return vel_lineal_left;
 }
@@ -175,7 +262,7 @@ inline float CalcVelRight(){
   //Calculo de la velocidad lineal del motor derecho. Esta es la variable a controlar en el lazo de control R (y_right).
   vel_angular_right = ( (total_flancos_right/NUM_FLANCOS_VUELTA)*2.0*PI / (INT_MUESTREO/1000.0) );// La velocidad angular esta en rad/s. Se divide el intervalo de 
                                                                                               //muestreo en 1000 porque esta en milisegundos
-  vel_lineal_right = vel_angular_right*0.03; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda (3cm)
+  vel_lineal_right = vel_angular_right*RADIO_RUEDA; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda
 
   return vel_lineal_right;
 }
@@ -236,7 +323,7 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
   float y; //velocidad lineal sensada (m/s)
   float e; //error de velocidad (m/s)
   float u; //accion de control, voltaje medio a aplicar en el motor, que se materializa como una señal PWM que
-                          //se aplica al driver del motor
+           //se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
   static float y1 = 0.0, e1 = 0.0, u1 = 0.0; //y1 = y(k-1); e1=e(k-1); u1 = u(k-1), u1 solo se utiliza para graficar la accion de control
@@ -252,10 +339,10 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
   if (e > TOLERANCIA){
     //Calculo de la accion de control del lazo L
     //Termino integrativo
-    integral = integral1 + kp_left*ki_left*INT_MUESTREO*(e + e1)/2;
+    integral = integral1 + kp_l*ki_l*INT_MUESTREO*(e + e1)/2;
     //Termino derivativo
-    deriv = td_left/(INT_MUESTREO + td_left) * (deriv1 - kp_left*(y - y1));
-    u = kp_left*e + integral + deriv;
+    deriv = td_l/(INT_MUESTREO + td_l) * (deriv1 - kp_l*(y - y1));
+    u = kp_l*e + integral + deriv;
 
     ActuadorLeft(u);
     
@@ -290,10 +377,10 @@ inline void ControlMotorRight(float r){
   if (e > TOLERANCIA){
     //Calculo de la accion de control del lazo R
     //Termino integrativo
-    integral = integral1 + kp_right*ki_right*INT_MUESTREO*(e + e1)/2;
+    integral = integral1 + kp_r*ki_r*INT_MUESTREO*(e + e1)/2;
     //Termino derivativo
-    deriv = td_right/(INT_MUESTREO + td_right) * (deriv1 - kp_right*(y - y1));
-    u = kp_right*e + integral + deriv;
+    deriv = td_r/(INT_MUESTREO + td_r) * (deriv1 - kp_r*(y - y1));
+    u = kp_r*e + integral + deriv;
 
     ActuadorRight(u);
 
