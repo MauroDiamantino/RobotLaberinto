@@ -1,14 +1,12 @@
 //////////////////////////////////////////LIBRERIAS//////////////////////////////////////////////////////////////////////////////////////////////////
 #include <FlexiTimer2.h>
 
-//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les ha asignado un atributo para forzar al compilador a
+//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para forzar al compilador a
 //respetar esta directiva
 inline void Excitador(float&, float&) __attribute__((always_inline));
 //inline void ParserParametroPID(String&, float&, const String) __attribute__((always_inline));
-inline float CalcVelLeft() __attribute__((always_inline));
-inline float CalcVelRight() __attribute__((always_inline));
-inline void ActuadorLeft(float) __attribute__((always_inline));
-inline void ActuadorRight(float) __attribute__((always_inline));
+inline float CalcVelLineal() __attribute__((always_inline));
+inline void Actuador(float, const unsigned int, const unsigned int) __attribute__((always_inline));
 inline void ControlMotorLeft(float) __attribute__((always_inline));
 inline void ControlMotorRight(float) __attribute__((always_inline));
 
@@ -44,21 +42,23 @@ const unsigned int PIN2_MOTOR_RIGHT = 10;
 
 //////////////////////////////////////////VARIABLES GLOBALES//////////////////////////////////////////////////////////////////////////////////////////
 //Contadores de los flancos efectivos (aquellos que producen interrupciones) de los encoder.
-unsigned int flancos_left = 0;
-unsigned int flancos_right = 0;
+volatile unsigned int flancos_left = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile unsigned int flancos_right = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 
 //Flancos efectivos contados por los encoder en un determinado lapso de tiempo, el intervalo de muestreo.
-unsigned int total_flancos_left = 0;  
-unsigned int total_flancos_right = 0;
+volatile unsigned int total_flancos_left = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile unsigned int total_flancos_right = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 
 //Contadores de tiempo (la resolucion es el intervalo de muestreo) que permiten ejecutar determinadas funciones 
 //cada ciertos intervalos de tiempo mayores al intervalo de muestreo.
-byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador
-unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
+volatile byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador. Se declara "volatile" siguiendo las recomendaciones que aparecen en la
+                                                    //pagina de la funcion attachInterrupt. [1]
+volatile unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
                                               //deberia ser inicializado con INT_CAMBIO_PARAM, debido a que esa constante representa el intervalo de tiempo cada 
                                               //cuanto se debe revisar el buffer serie para actualizar los parametros de los PIDs. Sin embargo, al inicializarlo 
                                               //con este valor diferente se busca generar un desfasaje con respecto a la fucion Excitador, para evitar la 
-                                              //sobrecarga del micro.
+                                              //sobrecarga del micro. Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la 
+                                              //funcion attachInterrupt. [1]
 
 //Parametros del PID del lazo de control L y referencia
 float kp_l = 0.0, ki_l = 0.0, td_l = 0.0; //Parametros del PID
@@ -73,9 +73,9 @@ float r_right = 0.0; //velocidad lineal de referencia (m/s)
 String buffer_serie;
 
 ///////////////////////////////////////////////FLAGs////////////////////////////////////////////////////////////////////////////////////////////////////
-boolean flag_control = false;
-boolean flag_excitador = false;
-boolean flag_parser = false;
+volatile boolean flag_control = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile boolean flag_excitador = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile boolean flag_parser = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 
 ///////////////////////////////////////////////SETUP////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(){
@@ -132,12 +132,15 @@ void loop(){
     if (Serial.available()!=0){
       while (Serial.available()!=0){  buffer_serie += Serial.read();  }
       buffer_serie.toLowerCase();
+      
       ParserParametroPID(buffer_serie, kp_l, "kp_l");
       ParserParametroPID(buffer_serie, ki_l, "ki_l");
       ParserParametroPID(buffer_serie, td_l, "td_l");
       ParserParametroPID(buffer_serie, kp_r, "kp_r");
       ParserParametroPID(buffer_serie, ki_r, "ki_r");
       ParserParametroPID(buffer_serie, td_r, "td_r");
+
+      buffer_serie=""; //Se termina de borrar el buffer
     }
     
     flag_parser = false;
@@ -239,36 +242,25 @@ void ParserParametroPID(String& buffer_serie, float& param, const String nombre_
   }
 }
 
-//Funcion que calcula la velocidad lineal de la rueda izquierda y retorna su valor
-inline float CalcVelLeft(){
-  float vel_angular_left = 0.0; //velocidad angular de las rueda izquierda
-  float vel_lineal_left = 0.0; //velocidad lineal de la rueda izquierda
+
+//Funcion que calcula la velocidad lineal de una rueda (cualquiera de las dos) y retorna su valor. El calculo se basa en la cantidad total de flancos 
+//(parametro de la funcion) medidos por el encoder durante un intervalo de muestreo. El algoritmo requiere del conocimiento del intervalo de muestreo
+//(INT_MUESTREO), el numero de flancos efectivos por vuelta (NUM_FLANCOS_VUELTA) y el radio de las ruedas (RADIO_RUEDA).
+inline float CalcVelLineal(unsigned int total_flancos){
+  float vel_angular = 0.0; //velocidad angular
+  float vel_lineal = 0.0; //velocidad lineal
   //No se obtiene mejora si se usa el tipo de dato 'double' por la placa que se esta usando
   
-  //Calculo de la velocidad lineal del motor izquierdo. Esta es la variable a controlar en el lazo de control L (y_left).
-  vel_angular_left = ( (total_flancos_left/NUM_FLANCOS_VUELTA)*2.0*PI / (INT_MUESTREO/1000.0) );// La velocidad angular esta en rad/s. Se divide el intervalo de 
-                                                                                              //muestreo en 1000 porque esta en milisegundos
-  vel_lineal_left = vel_angular_left*RADIO_RUEDA; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda
+  //Calculo de la velocidad lineal del motor en cuestion
+  vel_angular = ( (total_flancos/NUM_FLANCOS_VUELTA)*2.0*PI / (INT_MUESTREO/1000.0) );// La velocidad angular esta en rad/s. Se divide el intervalo de 
+                                                                                      //muestreo en 1000 porque esta en milisegundos
+  vel_lineal = vel_angular*RADIO_RUEDA; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda
   
-  return vel_lineal_left;
+  return vel_lineal;
 }
 
 
-inline float CalcVelRight(){
-  float vel_angular_right = 0.0; //velocidad angular de las rueda derecha
-  float vel_lineal_right = 0.0; //velocidad lineal de la rueda derecha
-  //no se obtiene mejora si se usa el tipo de dato 'double' por la placa que se esta usando
-
-  //Calculo de la velocidad lineal del motor derecho. Esta es la variable a controlar en el lazo de control R (y_right).
-  vel_angular_right = ( (total_flancos_right/NUM_FLANCOS_VUELTA)*2.0*PI / (INT_MUESTREO/1000.0) );// La velocidad angular esta en rad/s. Se divide el intervalo de 
-                                                                                              //muestreo en 1000 porque esta en milisegundos
-  vel_lineal_right = vel_angular_right*RADIO_RUEDA; // La velocidad lineal esta en m/s, se obtiene al multiplicar la velocidad angular por el radio de la rueda
-
-  return vel_lineal_right;
-}
-
-
-inline void ActuadorLeft(float u){
+inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int PIN2_MOTOR){
   byte pwm; //valor de PWM a aplicar en el pin digital correspondiente. Recordar que las salidas
             //PWM son de 8-bit en el Arduino Nano.
   
@@ -278,8 +270,8 @@ inline void ActuadorLeft(float u){
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
     //Aplicacion de la accion de control (PWM)
-    digitalWrite(PIN1_MOTOR_LEFT, LOW);
-    analogWrite(PIN2_MOTOR_LEFT,  pwm);
+    digitalWrite(PIN1_MOTOR, LOW);
+    analogWrite(PIN2_MOTOR,  pwm);
   } else { //voltaje medio de alimentacion del motor negativo (desaceleracion)
     u = abs(u);
     if (u < ZONA_MUERTA) u = ZONA_MUERTA;
@@ -287,33 +279,8 @@ inline void ActuadorLeft(float u){
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
     //Aplicacion de la accion de control (PWM)
-    digitalWrite(PIN2_MOTOR_LEFT, LOW);
-    analogWrite(PIN1_MOTOR_LEFT,  pwm);
-  }
-}
-
-
-inline void ActuadorRight(float u){
-  byte pwm; //valor de PWM a aplicar en el pin digital correspondiente. Recordar que las
-            //salidas PWM son de 8-bit en el Arduino Nano.
-
-  if (u >= 0.0){ //voltaje medio de alimentacion del motor positivo (aceleracion)
-    if (u!=0.0 && u<ZONA_MUERTA) u = ZONA_MUERTA;
-    if (u > TENSION_MAX) u = TENSION_MAX;
-    //Mapeo de la accion de control (voltaje) a PWM de 8 bits
-    pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
-    //Aplicacion de la accion de control (PWM)
-    digitalWrite(PIN1_MOTOR_RIGHT, LOW);
-    analogWrite(PIN2_MOTOR_RIGHT,  pwm);
-  } else { //voltaje medio de alimentacion del motor negativo (desaceleracion)
-    u = abs(u);
-    if (u < ZONA_MUERTA) u = ZONA_MUERTA;
-    if (u > TENSION_MAX) u = TENSION_MAX;
-    //Mapeo de la accion de control (voltaje) a PWM de 8 bits
-    pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
-    //Aplicacion de la accion de control (PWM)
-    digitalWrite(PIN2_MOTOR_RIGHT, LOW);
-    analogWrite(PIN1_MOTOR_RIGHT,  pwm);
+    digitalWrite(PIN2_MOTOR, LOW);
+    analogWrite(PIN1_MOTOR,  pwm);
   }
 }
 
@@ -330,8 +297,8 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   
   ////Lazo L////
-  //Obtencion del valor medido de la salida
-  y = CalcVelLeft();
+  //Obtencion del valor real de la salida
+  y = CalcVelLineal(total_flancos_left);
 
   //Calculo del error
   e = r - y;
@@ -344,7 +311,8 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
     deriv = td_l/(INT_MUESTREO + td_l) * (deriv1 - kp_l*(y - y1));
     u = kp_l*e + integral + deriv;
 
-    ActuadorLeft(u);
+    //Aplicacion de la señal de control generada por el PID
+    Actuador(u, PIN1_MOTOR_LEFT, PIN2_MOTOR_RIGHT);
     
     //Actualizacion de variables
     y1 = y;
@@ -368,8 +336,8 @@ inline void ControlMotorRight(float r){
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   
   ////Lazo R////
-  //Obtencion del valor medido de la salida
-  y = CalcVelRight();
+  //Obtencion del valor real de la salida
+  y = CalcVelLineal(total_flancos_right);
 
   //Calculo del error
   e = r - y;
@@ -382,8 +350,9 @@ inline void ControlMotorRight(float r){
     deriv = td_r/(INT_MUESTREO + td_r) * (deriv1 - kp_r*(y - y1));
     u = kp_r*e + integral + deriv;
 
-    ActuadorRight(u);
-
+    //Aplicacion de la señal de control generada por el PID
+    Actuador(u, PIN1_MOTOR_RIGHT, PIN2_MOTOR_LEFT);
+    
     //Actualizacion de variables
     y1 = y;
     e1 = e;
@@ -463,4 +432,7 @@ void setPwmFrequency(int pin, int divisor){
     TCCR2B = TCCR2B & 0b11111000 | mode;
   }
 }
+
+//Referencias
+//[1] https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/
 
