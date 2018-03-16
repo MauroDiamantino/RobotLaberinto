@@ -12,17 +12,18 @@ inline void ControlMotorRight(float) __attribute__((always_inline));
 
 //////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
 //const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
-const unsigned int INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
+const byte INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
 const byte SEMI_PER_EXCITACION = 100; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
-                                     //cuadrada, generada localmente, que se aplica en las entradas de referencia (r). Tiempo: 50mS.
-const unsigned int INT_CAMBIO_PARAM = 2000; //Intervalo de tiempo (en mS) de cambio de los parametreos de los controldadores PID. El micro debe revisar
+                                     //cuadrada, generada localmente, que se aplica en las entradas de referencia (r). Semiperiodo: 100mS.
+const unsigned int INT_CAMBIO_PARAM = 2000; //Intervalo de tiempo (en mS) para el cambio de los parametreos de los controldadores PID. El micro debe revisar
                                             //el buffer de entrada serie cada vez que se cumple este intervalo de tiempo y actualizar los parametros de los
                                             //PIDs si se han enviado nuevos valores.
                                      
-const unsigned long VEL_COM_SERIE = 115200;
+const unsigned long VEL_COM_SERIE = 115200; //Velocidad de la comunicacion serie
 const unsigned int NUM_FLANCOS_VUELTA = 16; //Cantidad de flancos efectivos de las señales de los encoders por cada vuelta de una reuda, es decir cantidad de
                                             //flancos por vuelta que producen interrupciones. Esto depende de la configuracion de las interrupciones del micro.
-const float ZONA_MUERTA = 4.0; //Zona muerta de los motor, solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
+const float ZONA_MUERTA_R = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
+const float ZONA_MUERTA_L = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
 const float TOLERANCIA = 0.1; //Tolerancia para el control de la velocidad de las rueda, 0.1m/s. Este valor debería ser definido
                               //considerando que el hecho de que exista una diferencia en las velocidades de las ruedas producira
                               //una desviacion lateral (giro) del robot mientras este intenta moverse en linea recta, lo cual
@@ -33,12 +34,12 @@ const float VEL_LIN_MAX = 1.0; //Velocidad lineal maxima (m/s) permitida para am
 const float RADIO_RUEDA = 0.03; //Radio de la ruedas en metros. Este es de 3cm, es decir 0.03m.
 
 //Pines
-const unsigned int PIN_ENCODER_LEFT = 2;
-const unsigned int PIN_ENCODER_RIGHT = 3;
-const unsigned int PIN1_MOTOR_LEFT = 5;
-const unsigned int PIN2_MOTOR_LEFT = 6;
-const unsigned int PIN1_MOTOR_RIGHT = 9;
-const unsigned int PIN2_MOTOR_RIGHT = 10;
+const byte PIN_ENCODER_LEFT = 2;
+const byte PIN_ENCODER_RIGHT = 3;
+const byte PIN1_MOTOR_LEFT = 5;
+const byte PIN2_MOTOR_LEFT = 6;
+const byte PIN1_MOTOR_RIGHT = 9;
+const byte PIN2_MOTOR_RIGHT = 10;
 
 //////////////////////////////////////////VARIABLES GLOBALES//////////////////////////////////////////////////////////////////////////////////////////
 //Contadores de los flancos efectivos (aquellos que producen interrupciones) de los encoder.
@@ -48,17 +49,6 @@ volatile unsigned int flancos_right = 0; //Se declara "volatile" siguiendo las r
 //Flancos efectivos contados por los encoder en un determinado lapso de tiempo, el intervalo de muestreo.
 volatile unsigned int total_flancos_left = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 volatile unsigned int total_flancos_right = 0; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
-
-//Contadores de tiempo (la resolucion es el intervalo de muestreo) que permiten ejecutar determinadas funciones 
-//cada ciertos intervalos de tiempo mayores al intervalo de muestreo.
-volatile byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador. Se declara "volatile" siguiendo las recomendaciones que aparecen en la
-                                                    //pagina de la funcion attachInterrupt. [1]
-volatile unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
-                                              //deberia ser inicializado con INT_CAMBIO_PARAM, debido a que esa constante representa el intervalo de tiempo cada 
-                                              //cuanto se debe revisar el buffer serie para actualizar los parametros de los PIDs. Sin embargo, al inicializarlo 
-                                              //con este valor diferente se busca generar un desfasaje con respecto a la fucion Excitador, para evitar la 
-                                              //sobrecarga del micro. Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la 
-                                              //funcion attachInterrupt. [1]
 
 //Parametros del PID del lazo de control L y referencia
 float kp_l = 0.0, ki_l = 0.0, td_l = 0.0; //Parametros del PID
@@ -157,6 +147,16 @@ void RS_ENCODER_RIGHT() {
 }
 
 void RS_TIMER2() {
+  //Contadores de tiempo (la resolucion es el intervalo de muestreo) que permiten ejecutar determinadas funciones 
+  //cada ciertos intervalos de tiempo mayores al intervalo de muestreo.
+  volatile byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador. Se declara "volatile" siguiendo las recomendaciones que aparecen en la
+                                                    //pagina de la funcion attachInterrupt. [1]
+  volatile unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
+                                              //deberia ser inicializado con INT_CAMBIO_PARAM, debido a que esa constante representa el intervalo de tiempo cada 
+                                              //cuanto se debe revisar el buffer serie para actualizar los parametros de los PIDs. Sin embargo, al inicializarlo 
+                                              //con este valor diferente se busca generar un desfasaje con respecto a la fucion Excitador, para evitar la 
+                                              //sobrecarga del micro. Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la 
+                                              //funcion attachInterrupt. [1]
   total_flancos_left = flancos_left;
   total_flancos_right = flancos_right;
 
@@ -260,7 +260,7 @@ inline float CalcVelLineal(unsigned int total_flancos){
 }
 
 
-inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int PIN2_MOTOR){
+inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int PIN2_MOTOR, const float ZONA_MUERTA){
   byte pwm; //valor de PWM a aplicar en el pin digital correspondiente. Recordar que las salidas
             //PWM son de 8-bit en el Arduino Nano.
   
@@ -293,7 +293,7 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
            //se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
-  static float y1 = 0.0, e1 = 0.0, u1 = 0.0; //y1 = y(k-1); e1=e(k-1); u1 = u(k-1), u1 solo se utiliza para graficar la accion de control
+  static float y1 = 0.0, e1 = 0.0; //y1 = y(k-1); e1=e(k-1);
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   
   ////Lazo L////
@@ -312,12 +312,11 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
     u = kp_l*e + integral + deriv;
 
     //Aplicacion de la señal de control generada por el PID
-    Actuador(u, PIN1_MOTOR_LEFT, PIN2_MOTOR_RIGHT);
+    Actuador(u, PIN1_MOTOR_LEFT, PIN2_MOTOR_LEFT, ZONA_MUERTA_L);
     
     //Actualizacion de variables
     y1 = y;
     e1 = e;
-    u1 = u;
     integral1 = integral;
     deriv1 = deriv;
   }
@@ -332,7 +331,7 @@ inline void ControlMotorRight(float r){
                           //se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
-  static float y1 = 0.0, e1 = 0.0, u1 = 0.0; //y1 = y(k-1); e1=e(k-1); u1 = u(k-1), u1 solo se utiliza para graficar la accion de control
+  static float y1 = 0.0, e1 = 0.0; //y1 = y(k-1); e1=e(k-1);
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   
   ////Lazo R////
@@ -351,12 +350,11 @@ inline void ControlMotorRight(float r){
     u = kp_r*e + integral + deriv;
 
     //Aplicacion de la señal de control generada por el PID
-    Actuador(u, PIN1_MOTOR_RIGHT, PIN2_MOTOR_LEFT);
+    Actuador(u, PIN1_MOTOR_RIGHT, PIN2_MOTOR_RIGHT, ZONA_MUERTA_R);
     
     //Actualizacion de variables
     y1 = y;
     e1 = e;
-    u1 = u;
     integral1 = integral;  
     deriv1 = deriv;
   }
