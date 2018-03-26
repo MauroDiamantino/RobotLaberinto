@@ -1,8 +1,8 @@
 //////////////////////////////////////////LIBRERIAS//////////////////////////////////////////////////////////////////////////////////////////////////
 #include <FlexiTimer2.h>
 
-//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para forzar al compilador a
-//respetar esta directiva
+//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para
+//forzar al compilador a respetar esta directiva.
 inline void Excitador(float&, float&) __attribute__((always_inline));
 //inline void ParserParametroPID(String&, float&, const String) __attribute__((always_inline));
 inline float CalcVelLineal() __attribute__((always_inline));
@@ -13,9 +13,9 @@ inline void ControlMotorRight(float) __attribute__((always_inline));
 //////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
 //const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
 const byte INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
-const byte SEMI_PER_EXCITACION = 100; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
-                                     //cuadrada, generada localmente, que se aplica en las entradas de referencia (r). Semiperiodo: 100mS.
-const unsigned int INT_CAMBIO_PARAM = 2000; //Intervalo de tiempo (en mS) para el cambio de los parametreos de los controldadores PID. El micro debe revisar
+const unsigned int SEMI_PER_EXCITACION = 2000; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
+                                              //cuadrada, generada localmente, que se aplica en las entradas de referencia (r).
+const unsigned int INT_CAMBIO_PARAM = 5000; //Intervalo de tiempo (en mS) para el cambio de los parametreos de los controldadores PID. El micro debe revisar
                                             //el buffer de entrada serie cada vez que se cumple este intervalo de tiempo y actualizar los parametros de los
                                             //PIDs si se han enviado nuevos valores.
                                      
@@ -33,13 +33,14 @@ const float TENSION_MAX = 11.1; //Los motores tienen las siguientes caracteristi
 const float VEL_LIN_MAX = 1.0; //Velocidad lineal maxima (m/s) permitida para ambos motores.
 const float RADIO_RUEDA = 0.03; //Radio de la ruedas en metros. Este es de 3cm, es decir 0.03m.
 
-//Pines
+////////////Pines////////////////////
 const byte PIN_ENCODER_LEFT = 2;
 const byte PIN_ENCODER_RIGHT = 3;
 const byte PIN1_MOTOR_LEFT = 5;
 const byte PIN2_MOTOR_LEFT = 6;
 const byte PIN1_MOTOR_RIGHT = 9;
 const byte PIN2_MOTOR_RIGHT = 10;
+const byte PIN_EXCITADOR_ONOFF = 13;
 
 //////////////////////////////////////////VARIABLES GLOBALES//////////////////////////////////////////////////////////////////////////////////////////
 //Contadores de los flancos efectivos (aquellos que producen interrupciones) de los encoder.
@@ -52,11 +53,11 @@ volatile unsigned int total_flancos_right = 0; //Se declara "volatile" siguiendo
 
 //Parametros del PID del lazo de control L y referencia
 float kp_l = 0.0, ki_l = 0.0, td_l = 0.0; //Parametros del PID
-float r_left = 0.0; //velocidad lineal de referencia (m/s)
+float r_left = 0.0; //Velocidad lineal de referencia (m/s)
 
 //Parametros del PID del lazo de control L y referencia
 float kp_r = 0.0, ki_r = 0.0, td_r = 0.0; //Parametros del PID
-float r_right = 0.0; //velocidad lineal de referencia (m/s)
+float r_right = 0.0; //Velocidad lineal de referencia (m/s)
 
 //Buffer de la comunicacion serie
 //char buffer_serie[100];
@@ -77,6 +78,7 @@ void setup(){
   pinMode(PIN2_MOTOR_LEFT, OUTPUT);
   pinMode(PIN1_MOTOR_RIGHT, OUTPUT);
   pinMode(PIN2_MOTOR_RIGHT, OUTPUT);
+  pinMode(PIN_EXCITADOR_ONOFF, INPUT_PULLUP);
 
   //Configuracion de la frecuencia de las salidas PWM
   setPwmFrequency(PIN1_MOTOR_LEFT, 8); //se configura la freq PWM en 8KHz aprox
@@ -149,14 +151,12 @@ void RS_ENCODER_RIGHT() {
 void RS_TIMER2() {
   //Contadores de tiempo (la resolucion es el intervalo de muestreo) que permiten ejecutar determinadas funciones 
   //cada ciertos intervalos de tiempo mayores al intervalo de muestreo.
-  volatile byte cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador. Se declara "volatile" siguiendo las recomendaciones que aparecen en la
-                                                    //pagina de la funcion attachInterrupt. [1]
-  volatile unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
+  static unsigned int cont_excitador = SEMI_PER_EXCITACION; //Contador de tiempo del Excitador.
+  static unsigned int cont_parser = (unsigned int) (INT_CAMBIO_PARAM + INT_CAMBIO_PARAM/11); //Contador de tiempo del Parser de los parametros de los PIDs. El contador 
                                               //deberia ser inicializado con INT_CAMBIO_PARAM, debido a que esa constante representa el intervalo de tiempo cada 
                                               //cuanto se debe revisar el buffer serie para actualizar los parametros de los PIDs. Sin embargo, al inicializarlo 
                                               //con este valor diferente se busca generar un desfasaje con respecto a la fucion Excitador, para evitar la 
-                                              //sobrecarga del micro. Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la 
-                                              //funcion attachInterrupt. [1]
+                                              //sobrecarga del micro.
   total_flancos_left = flancos_left;
   total_flancos_right = flancos_right;
 
@@ -165,14 +165,20 @@ void RS_TIMER2() {
 
   flag_control = true;
 
-  cont_excitador--;
-  if (cont_excitador==0){
-    cont_excitador = SEMI_PER_EXCITACION;
-    flag_excitador=true;
+  if ( digitalRead(PIN_EXCITADOR_ONOFF)==LOW ){
+    cont_excitador--;
+    if (cont_excitador<=0){
+      cont_excitador = SEMI_PER_EXCITACION;
+      flag_excitador=true;
+    }
+  } else if (r_left==0 || r_right==0){
+    r_left = VEL_LIN_MAX;
+    r_right = VEL_LIN_MAX;
+    flag_excitador = false;
   }
 
   cont_parser--;
-  if (cont_parser==0){
+  if (cont_parser<=0){
     cont_parser = INT_CAMBIO_PARAM;
     flag_parser = true;
   }
@@ -265,16 +271,17 @@ inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int 
             //PWM son de 8-bit en el Arduino Nano.
   
   if (u >= 0.0){ //voltaje medio de alimentacion del motor positivo (aceleracion)
-    if (u!=0.0 && u<ZONA_MUERTA) u = ZONA_MUERTA;
+    if (u < ZONA_MUERTA) u = 0.0;
     if (u > TENSION_MAX) u = TENSION_MAX;
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
     //Aplicacion de la accion de control (PWM)
     digitalWrite(PIN1_MOTOR, LOW);
     analogWrite(PIN2_MOTOR,  pwm);
+    
   } else { //voltaje medio de alimentacion del motor negativo (desaceleracion)
     u = abs(u);
-    if (u < ZONA_MUERTA) u = ZONA_MUERTA;
+    if (u < ZONA_MUERTA) u = 0.0;
     if (u > TENSION_MAX) u = TENSION_MAX;
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     pwm = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
@@ -327,8 +334,8 @@ inline void ControlMotorRight(float r){
   //Variables relacionadas con el lazo de control R
   float y; //velocidad lineal sensada (m/s)
   float e; //error de velocidad (m/s)
-  float u; //accion de control, voltaje medio a aplicar en el motor, que se materializa como una señal PWM que
-                          //se aplica al driver del motor
+  float u; //accion de control, voltaje medio a aplicar en el motor, que se materializa 
+          //como una señal PWM que se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
   static float y1 = 0.0, e1 = 0.0; //y1 = y(k-1); e1=e(k-1);
