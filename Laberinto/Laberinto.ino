@@ -4,7 +4,6 @@
 //Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para
 //forzar al compilador a respetar esta directiva.
 inline void Excitador(float&, float&) __attribute__((always_inline));
-//inline void ParserParametroPID(String&, float&, const String) __attribute__((always_inline));
 inline float CalcVelLineal() __attribute__((always_inline));
 inline void Actuador(float, const unsigned int, const unsigned int) __attribute__((always_inline));
 inline void ControlMotorLeft(float) __attribute__((always_inline));
@@ -107,34 +106,25 @@ void setup(){
 void loop(){
   
   if (flag_control == true){
-
     ControlMotorLeft(r_left);
     ControlMotorRight(r_right);
-    
     flag_control = false;
   }
 
   if (flag_excitador == true){
     Excitador(r_left, r_right);
-
     flag_excitador = false;
   }
 
   if (flag_parser == true){
-    if (Serial.available()!=0){
-      while (Serial.available()!=0){  buffer_serie += Serial.read();  }
+    unsigned int aux = Serial.available();
+    if (aux != 0){
+      buffer_serie.reserve(aux);
+      while (Serial.available()!=0){  buffer_serie += (char)Serial.read();  }
       buffer_serie.toLowerCase();
-      
-      ParserParametroPID(buffer_serie, kp_l, "kp_l");
-      ParserParametroPID(buffer_serie, ki_l, "ki_l");
-      ParserParametroPID(buffer_serie, td_l, "td_l");
-      ParserParametroPID(buffer_serie, kp_r, "kp_r");
-      ParserParametroPID(buffer_serie, ki_r, "ki_r");
-      ParserParametroPID(buffer_serie, td_r, "td_r");
-
-      buffer_serie=""; //Se termina de borrar el buffer
+      ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r);
+      buffer_serie=""; //Se borra el contenido del buffer
     }
-    
     flag_parser = false;
   }
 }
@@ -174,6 +164,10 @@ void RS_TIMER2() {
   } else if (r_left==0 || r_right==0){
     r_left = VEL_LIN_MAX;
     r_right = VEL_LIN_MAX;
+//    Serial.print("r_left= ");
+//    Serial.println(r_left);
+//    Serial.print("r_right= ");
+//    Serial.println(r_right);
     flag_excitador = false;
   }
 
@@ -201,51 +195,132 @@ inline void Excitador(float& r_left, float& r_right){ //r_left y r_right son ref
   }else{
     r_right = 0;
   }
+//  Serial.print("r_left= ");
+//  Serial.println(r_left);
+//  Serial.print("r_right= ");
+//  Serial.println(r_right);
 }
 
 
-void ParserParametroPID(String& buffer_serie, float& param, const String nombre_param){
-  //Constantes
-  const unsigned int LONG_SUBSTRING = 5; //Longitud del substring a buscar. Este contiene 4 caracteres correspondientes
-                                        //al nombre del parametro en cuestion (todos los parametros tienen nombres con la misma
-                                        //longitud) y ademas el caracter de asignacion '='
-  const String aux2 = nombre_param + '='; //Se utiliza para formar el string a buscar en el buffer
-  
-  //Variables
+//Funcion que se encarga de parsear (analizar un string y obtener datos del mismo) los strings recibidos por el puerto serie, para obtener los valores de
+//los parametros de los controladores PID. La estructura (o formato) que debe tener el string es la siguiente:
+//    "kp_x=x.xx; ki_x=x.xx; td_x=x.xx;"
+//Donde x representa caracteres variables. En el caso de las x's que siguen a los guiones bajos, solo pueden ser 'l'(ele) o 'r'. El resto de las x's solo pueden ser
+//numeros. La cantidad de digitos fraccionarios puede variar. La funcion primero controla el formato del string y si es correcto extrae los valores
+//y se los asigna a los parametros correspondientes. En este caso, responde mostrando los valores asignados. En caso de que el formato sea incorrecto
+//responde con un mensaje de error que indica el formato correcto.
+void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& td_l, float& kp_r, float& ki_r, float& td_r){
+  char aux_lazo;
   unsigned int num_chars; //Numero de caracteres en el buffer de entrada serie
-  boolean flag_encontrado = false; //Flag que indica si el parametro fue hallado en el buffer o no
-  unsigned int i = 0; //Indice de posicion
-  String aux1 = ""; //Se utiliza para obtener el substring que representa el valor numerico del parametro
-  unsigned int pos_inicial; //Almacena la posicion en el buffer a partir de la cual esta el parametro buscado,
-                            //si fue hallado
-  unsigned int cont; //Contador de caracteres a borrar en el buffer, una vez que se encuentra un parametro y 
-                     //se extrae su valor numerico
+  unsigned int i = 0; //Indice de posicion en el string
+  unsigned int pos_inicial;
+  boolean flag_correcto = false; //Flag que indica si el string recibido tiene una esctructura correcta
+  float kp, ki, td;
+  unsigned int pos_inic[3];
+  unsigned int pos_final[3];
 
+  //Analisis del formato: Se analiza si el formato es correcto. Solo se extraen valores si el formato es correcto.
   num_chars = buffer_serie.length();
 
-  ////Busqueda del parametro en el string////
-  //Lazo de busqueda
-  while ( flag_encontrado==false && i<=(num_chars-LONG_SUBSTRING) ){
-    if ( buffer_serie.substring(i,i+LONG_SUBSTRING)==aux2 ){  flag_encontrado = true; }
+  if (num_chars >= 29){
+    
+    if ( buffer_serie.substring(0,3)=="kp_" ){
+      aux_lazo = buffer_serie[3];
+      
+      if( aux_lazo=='l' || aux_lazo=='r' ){
+        
+        if ( buffer_serie[4]=='=' && (buffer_serie[5]>='0' && buffer_serie[5]<='9') && buffer_serie[6]=='.' ){
+            pos_inic[0] = 5; //posicion inicial del valor del primer parametro +1
+            
+            if( ControlParteFrac(i, buffer_serie) ){
+              pos_final[0] = i; //posicion final del valor del primer parametro +1
+              i++; //i estaba apuntando al ';', se incremente para que señale al caracter espacio
+              
+              if ( buffer_serie[i]==' ' ){
+                i++; //se lo incrementa para que señale el primer caracter del nombre del parametro
+          
+                if ( buffer_serie.substring(i,i+3)=="ki_" && buffer_serie[i+3]==aux_lazo && buffer_serie[i+4]=='=' && 
+                    (buffer_serie[i+5]>='0' && buffer_serie[i+5]<='9') && buffer_serie[i+6]=='.' ){
+                    pos_inic[1] = i+5; //posicion inicial del valor del segundo parametro +1
+
+                    if( ControlParteFrac(i, buffer_serie) ){
+                      pos_final[1] = i; //posicion final del valor del segundo parametro +1
+                      i++; //i estaba apuntando al ';', se incremente para que señale al caracter espacio
+
+                      if( buffer_serie[i]==' ' ){
+                        i++; //se lo incrementa para que señale el primer caracter del nombre del parametro
+                        
+                        if ( buffer_serie.substring(i,i+3)=="td_" && buffer_serie[i+3]==aux_lazo && buffer_serie[i+4]=='=' && 
+                            (buffer_serie[i+5]>='0' && buffer_serie[i+5]<='9') && buffer_serie[i+6]=='.' ){
+                            pos_inic[2] = i+5; //posicion inicial del valor del tercer parametro +1
+                            
+                            if( ControlParteFrac(i, buffer_serie) ){
+                              pos_final[2] = i; //posicion final del valor del tercer parametro +1
+                              
+                              flag_correcto = true; //Si se llega a este punto es que el formato del string es correcto!
+                            }
+                        }
+                      }
+                    }
+                  }
+                }   
+            }
+        }
+      }
+    }
+  }
+
+  //Obtencion y asignacion: se obtiene los valores numericos de las posiciones correspondientes
+  //y asignacion a los parametros del lazo L o del lazo R
+  if ( flag_correcto==true ){
+    String aux;
+    if ( aux_lazo=='l' ){
+      aux = buffer_serie.substring(pos_inic[0], pos_final[0]);
+      kp_l = aux.toFloat();
+      aux = buffer_serie.substring(pos_inic[1], pos_final[1]);
+      ki_l = aux.toFloat();
+      aux = buffer_serie.substring(pos_inic[2], pos_final[2]);
+      td_l = aux.toFloat();
+      Serial.print("Asignado: kp_l=");
+      Serial.print(kp_l);
+      Serial.print("; ki_l=");
+      Serial.print(ki_l);
+      Serial.print("; td_l=");
+      Serial.print(td_l);
+      Serial.println(";");
+    } else {
+      aux = buffer_serie.substring(pos_inic[0], pos_final[0]);
+      kp_r = aux.toFloat();
+      aux = buffer_serie.substring(pos_inic[1], pos_final[1]);
+      ki_r = aux.toFloat();
+      aux = buffer_serie.substring(pos_inic[2], pos_final[2]);
+      td_r = aux.toFloat();
+      Serial.print("Asignado: kp_r=");
+      Serial.print(kp_r);
+      Serial.print("; ki_r=");
+      Serial.print(ki_r);
+      Serial.print("; td_r=");
+      Serial.print(td_r);
+      Serial.println(";");
+    }
+  } else {
+    Serial.println("Error: el formato correcto es \"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\"");
+  }
+}
+
+
+//Funcion que controla el formato de la parte fraccionaria de los numeros del string recibido por el puerto serie.
+//Es utilizada en la funcion ParserParametrosPID().
+boolean ControlParteFrac(unsigned int& i, String& buffer_serie){
+  boolean flag_error = false;
+  
+  i += 7;
+  while ( flag_error==false && buffer_serie[i]!=';' ){
+    if ( buffer_serie[i]<'0' && buffer_serie[i]>'9' )   flag_error = true;
     i++;
   }
-  i--;
-  
-  //Obtencion del valor del parametro, si este fue hallado
-  if (flag_encontrado==true){
-    pos_inicial= i; //Se almacena la posicion donde comienza el nombre del parametro
-    i+=LONG_SUBSTRING; //Se hace avanzar el indice hasta la posicion donde empieza el valor numerico del parametro
-    //Lazo de obtencion del valor numerico
-    while ( buffer_serie[i]!=',' && buffer_serie[i]!=';' ){ 
-      aux1+=buffer_serie[i];
-      i++;
-    }
-    param = aux1.toFloat();
 
-    //Borrado del parametro y su valor del buffer de entrada serie
-    cont = i-pos_inicial+1; //Cantidad de caracteres a remover
-    buffer_serie.remove(pos_inicial, cont);
-  }
+  return !flag_error;
 }
 
 
