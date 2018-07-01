@@ -11,10 +11,10 @@ inline void ControlMotorRight(float) __attribute__((always_inline));
 
 //////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
 //const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
-const byte INT_MUESTREO = 1; //Intervalo de muestro en milisegundos, 1mS.
-const unsigned int SEMI_PER_EXCITACION = 2000; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
+const byte INT_MUESTREO = 10; //Intervalo de muestro en milisegundos, 10mS.
+const unsigned int SEMI_PER_EXCITACION = 5000/INT_MUESTREO; //Semiperiodo (en mS) de la señal de excitacion que permite calibrar los PIDs. Se trata de una señal
                                               //cuadrada, generada localmente, que se aplica en las entradas de referencia (r).
-const unsigned int INT_CAMBIO_PARAM = 5000; //Intervalo de tiempo (en mS) para el cambio de los parametreos de los controldadores PID. El micro debe revisar
+const unsigned int INT_CAMBIO_PARAM = 5000/INT_MUESTREO; //Intervalo de tiempo (en mS) para el cambio de los parametreos de los controldadores PID. El micro debe revisar
                                             //el buffer de entrada serie cada vez que se cumple este intervalo de tiempo y actualizar los parametros de los
                                             //PIDs si se han enviado nuevos valores.
                                      
@@ -23,11 +23,10 @@ const unsigned int NUM_FLANCOS_VUELTA = 16; //Cantidad de flancos efectivos de l
                                             //flancos por vuelta que producen interrupciones. Esto depende de la configuracion de las interrupciones del micro.
 const float ZONA_MUERTA_R = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
 const float ZONA_MUERTA_L = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
-const float TOLERANCIA = 0.1; //Tolerancia para el control de la velocidad de las rueda, 0.1m/s. Este valor debería ser definido
-                              //considerando que el hecho de que exista una diferencia en las velocidades de las ruedas producira
-                              //una desviacion lateral (giro) del robot mientras este intenta moverse en linea recta, lo cual
-                              //podria producir el impacto del mismo contra las paredes del laberinto si el valor no es elegido
-                              //correctamente.
+const float TOLERANCIA = 0.1; //Tolerancia para el control de la velocidad de las rueda, 0.1m/s. Este valor debería ser definido considerando que el hecho de
+                              //que exista una diferencia en las velocidades de las ruedas producira una desviacion lateral (giro) del robot mientras este
+                              //intenta moverse en linea recta, lo cual podria producir el impacto del mismo contra las paredes del laberinto si el
+                              //valor no es elegido correctamente.
 const float TENSION_MAX = 11.1; //Los motores tienen las siguientes caracteristicas: 18V, 11 Ohm y 8800RPM.
 const float VEL_LIN_MAX = 1.0; //Velocidad lineal maxima (m/s) permitida para ambos motores.
 const float RADIO_RUEDA = 0.03; //Radio de la ruedas en metros. Este es de 3cm, es decir 0.03m.
@@ -59,12 +58,12 @@ float kp_r = 0.0, ki_r = 0.0, td_r = 0.0; //Parametros del PID
 float r_right = 0.0; //Velocidad lineal de referencia (m/s)
 
 //Buffer de la comunicacion serie
-//char buffer_serie[100];
 String buffer_serie;
 
 ///////////////////////////////////////////////FLAGs////////////////////////////////////////////////////////////////////////////////////////////////////
 volatile boolean flag_control = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
-volatile boolean flag_excitador = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile boolean flag_excitar = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
+volatile boolean flag_excitador_on = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 volatile boolean flag_parser = false; //Se declara "volatile" siguiendo las recomendaciones que aparecen en la pagina de la funcion attachInterrupt. [1]
 
 ///////////////////////////////////////////////SETUP////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -104,26 +103,51 @@ void setup(){
 
 ///////////////////////////////////////////////LOOP////////////////////////////////////////////////////////////////////////////////////////////////////
 void loop(){
+  float vel_real_l, vel_real_r;
   
   if (flag_control == true){
-    ControlMotorLeft(r_left);
-    ControlMotorRight(r_right);
+    vel_real_l = ControlMotorLeft(r_left);
+    vel_real_r = ControlMotorRight(r_right);
+    //Se envian las muestras de las velocidades reales para evaluar la evolucion de las mismas en MatLab y así poder calibrar los PIDs
+    Serial.print("vel_l=");
+    Serial.println(vel_real_l);
+    Serial.print("vel_r=");
+    Serial.println(vel_real_r);
     flag_control = false;
   }
 
-  if (flag_excitador == true){
+  if (flag_excitar == true){
     Excitador(r_left, r_right);
-    flag_excitador = false;
+//  Serial.print("r_left= ");
+//  Serial.println(r_left);
+//  Serial.print("r_right= ");
+//  Serial.println(r_right);
+    flag_excitar = false;
+  }
+
+  if ( digitalRead(PIN_EXCITADOR_ONOFF)==LOW ){
+    flag_excitador_on = true;
+  }else if (r_left==0 && r_right==0){
+    r_left = VEL_LIN_MAX;
+    r_right = VEL_LIN_MAX;
   }
 
   if (flag_parser == true){
+    float velocidad;
     unsigned int aux = Serial.available();
     if (aux != 0){
       buffer_serie.reserve(aux);
-      while (Serial.available()!=0){  buffer_serie += (char)Serial.read();  }
+      //while (Serial.available()!=0){  buffer_serie += (char)Serial.read();  }
+      buffer_serie = Serial.readStringUntil('\n');
       buffer_serie.toLowerCase();
-      ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r);
-      buffer_serie=""; //Se borra el contenido del buffer
+      if ( !ParserVelocidad(buffer_serie, r_left, r_right) ){
+        if ( !ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r) ){
+          Serial.println("El formato del string recibido no se corresponde con ninguno de los formatos esperados:");
+          Serial.println("\t\"vel_l=x.xx; vel_r=x.xx.\"");
+          Serial.println("\t\"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\"");
+        }
+      }
+      buffer_serie = ""; //Se borra el contenido del buffer
     }
     flag_parser = false;
   }
@@ -155,20 +179,12 @@ void RS_TIMER2() {
 
   flag_control = true;
 
-  if ( digitalRead(PIN_EXCITADOR_ONOFF)==LOW ){
+  if ( flag_excitador_on ){
     cont_excitador--;
     if (cont_excitador<=0){
       cont_excitador = SEMI_PER_EXCITACION;
-      flag_excitador=true;
+      flag_excitar = true;
     }
-  } else if (r_left==0 || r_right==0){
-    r_left = VEL_LIN_MAX;
-    r_right = VEL_LIN_MAX;
-//    Serial.print("r_left= ");
-//    Serial.println(r_left);
-//    Serial.print("r_right= ");
-//    Serial.println(r_right);
-    flag_excitador = false;
   }
 
   cont_parser--;
@@ -179,6 +195,7 @@ void RS_TIMER2() {
 }
 
 ////////////////////////////////////////////////////////////////////FUNCIONES//////////////////////////////////////////////////////////////////////////////
+
 //Funcion que se encarga de generar una señal cuadrada para excitar ambos lazo de control (excitacion local) y asi poder calibrar los PIDs de los mismos. 
 //La señal cuadrada se conecta a las entradas de referencia de ambos lazos (setpoints). Esta señal tiene un semiperiodo mucho mayor que el intervalo de muestreo,
 //de modo que luego de que se produzca un flanco (cambio de setpoint) los lazos tengan suficiente tiempo para reducir los errores y estabilizar las salidas 
@@ -195,25 +212,84 @@ inline void Excitador(float& r_left, float& r_right){ //r_left y r_right son ref
   }else{
     r_right = 0;
   }
-//  Serial.print("r_left= ");
-//  Serial.println(r_left);
-//  Serial.print("r_right= ");
-//  Serial.println(r_right);
 }
 
 
-//Funcion que se encarga de parsear (analizar un string y obtener datos del mismo) los strings recibidos por el puerto serie, para obtener los valores de
+//Funcion que se encarga de parsear (analizar un string y obtener datos del mismo) un string recibido por el puerto serie para obtener un par de valores de velocidad
+//que se aplicaran como referencias para cada lazo de control de velocidad. La estructura (o formato) que debe tener el string es la siguiente:
+//    "vel_l=x.xx; vel_r=x.xx."
+//Donde la 'x' representa caracteres variables que solo pueden ser numeros. La cantidad de digitos fraccionarios puede variar. La funcion primero controla el formato del
+//string y si es correcto extrae los valores numericos y se los asigna a los parametros 'vel_l' y 'vel_r', que son recibidos como referencias. Ademas, responde enviando
+//los valores recibidos por el puerto serie y retorna con un valor booleano 'ALTO'. En caso de que el formato sea incorrecto, retorna con una valor booleano 'BAJO'.
+boolean ParserVelocidad(String& buffer_serie, float& vel_l, float& vel_r){
+  unsigned int num_chars; //Numero de caracteres en el buffer de entrada serie
+  unsigned int i = 0; //Indice de posicion en el string
+  boolean flag_correcto = false; //Flag que indica si el string recibido tiene una esctructura correcta
+  unsigned int pos_inic[2];
+  unsigned int pos_final[2];
+
+  //Analisis del formato: Se analiza si el formato es correcto. Solo se extraen valores si el formato es correcto.
+  num_chars = buffer_serie.length();
+
+  if (num_chars >= 21){
+    
+    if (buffer_serie.substring(0,6)=="vel_l=" && (buffer_serie[6]>='0' && buffer_serie[6]<='9') && buffer_serie[7]=='.'){
+      pos_inic[0] = 6; //posicion inicial del primer valor
+      i += 8; //Se incrementa el indice para que apunte al primer digito fraccionario
+      
+      if ( ControlParteFrac(i, buffer_serie) ){
+        pos_final[0] = i; //posicion final del primer valor +1
+        i++; //i estaba apuntando al ';', se incrementa para que señale al caracter espacio
+
+        if ( buffer_serie[i]==' ' ){
+          i++; //se lo incrementa para que señale el primer caracter del siguiente nombre
+
+          if (buffer_serie.substring(i,i+6)=="vel_r=" && (buffer_serie[i+6]>='0' && buffer_serie[i+6]<='9') && buffer_serie[i+7]=='.'){
+            pos_inic[1] = i+6; //posicion inicial del segundo valor
+            i += 8; //Se incrementa el indice para que apunte al primer digito fraccionario
+            
+            if ( ControlParteFrac(i, buffer_serie) ){
+              pos_final[1] = i; //posicion final del segundo valor +1
+
+              flag_correcto = true; //Si se llega a este punto es que el formato del string es correcto!
+            }
+          }
+        }
+      }
+    }
+  }
+
+  //Obtencion y asignacion: se obtiene los valores numericos de las posiciones correspondientes
+  //y se asignan a los parametros correspondientes
+  if ( flag_correcto==true ){
+    String aux;
+    aux = buffer_serie.substring(pos_inic[0], pos_final[0]);
+    vel_l = aux.toFloat();
+    aux = buffer_serie.substring(pos_inic[1], pos_final[1]);
+    vel_r = aux.toFloat();
+    Serial.print("Asignado: vel_l=");
+    Serial.print(vel_l);
+    Serial.print("; vel_r=");
+    Serial.print(vel_r);
+    Serial.println(';');
+  }
+
+  return (flag_correcto);  
+}
+
+
+//Funcion que se encarga de parsear (analizar un string y obtener datos del mismo) un string recibido por el puerto serie, para obtener los valores de
 //los parametros de los controladores PID. La estructura (o formato) que debe tener el string es la siguiente:
 //    "kp_x=x.xx; ki_x=x.xx; td_x=x.xx;"
-//Donde x representa caracteres variables. En el caso de las x's que siguen a los guiones bajos, solo pueden ser 'l'(ele) o 'r'. El resto de las x's solo pueden ser
+//Donde la 'x' representa caracteres variables. En el caso de las x's que siguen a los guiones bajos, solo pueden ser 'l'(ele) o 'r'. El resto de las x's solo pueden ser
 //numeros. La cantidad de digitos fraccionarios puede variar. La funcion primero controla el formato del string y si es correcto extrae los valores
-//y se los asigna a los parametros correspondientes. En este caso, responde mostrando los valores asignados. En caso de que el formato sea incorrecto
-//responde con un mensaje de error que indica el formato correcto.
-void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& td_l, float& kp_r, float& ki_r, float& td_r){
+//y se los asigna a los parametros correspondientes. En este caso, responde mostrando los valores asignados y retorna con una valor booleano 'ALTO'. En caso de que 
+//el formato sea incorrecto retorna con una valor booleano 'BAJO'.
+boolean ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& td_l, float& kp_r, float& ki_r, float& td_r){
   char aux_lazo;
   unsigned int num_chars; //Numero de caracteres en el buffer de entrada serie
   unsigned int i = 0; //Indice de posicion en el string
-  unsigned int pos_inicial;
+  //unsigned int pos_inicial;
   boolean flag_correcto = false; //Flag que indica si el string recibido tiene una esctructura correcta
   float kp, ki, td;
   unsigned int pos_inic[3];
@@ -230,7 +306,8 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
       if( aux_lazo=='l' || aux_lazo=='r' ){
         
         if ( buffer_serie[4]=='=' && (buffer_serie[5]>='0' && buffer_serie[5]<='9') && buffer_serie[6]=='.' ){
-            pos_inic[0] = 5; //posicion inicial del valor del primer parametro +1
+            pos_inic[0] = 5; //posicion inicial del valor del primer parametro
+            i += 7; //Se incrementa el indice para que apunte al primer digito fraccionario
             
             if( ControlParteFrac(i, buffer_serie) ){
               pos_final[0] = i; //posicion final del valor del primer parametro +1
@@ -241,8 +318,9 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
           
                 if ( buffer_serie.substring(i,i+3)=="ki_" && buffer_serie[i+3]==aux_lazo && buffer_serie[i+4]=='=' && 
                     (buffer_serie[i+5]>='0' && buffer_serie[i+5]<='9') && buffer_serie[i+6]=='.' ){
-                    pos_inic[1] = i+5; //posicion inicial del valor del segundo parametro +1
-
+                    pos_inic[1] = i+5; //posicion inicial del valor del segundo parametro
+                    i += 7; //Se incrementa el indice para que apunte al primer digito fraccionario
+                    
                     if( ControlParteFrac(i, buffer_serie) ){
                       pos_final[1] = i; //posicion final del valor del segundo parametro +1
                       i++; //i estaba apuntando al ';', se incremente para que señale al caracter espacio
@@ -252,7 +330,8 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
                         
                         if ( buffer_serie.substring(i,i+3)=="td_" && buffer_serie[i+3]==aux_lazo && buffer_serie[i+4]=='=' && 
                             (buffer_serie[i+5]>='0' && buffer_serie[i+5]<='9') && buffer_serie[i+6]=='.' ){
-                            pos_inic[2] = i+5; //posicion inicial del valor del tercer parametro +1
+                            pos_inic[2] = i+5; //posicion inicial del valor del tercer parametro
+                            i += 7; //Se incrementa el indice para que apunte al primer digito fraccionario
                             
                             if( ControlParteFrac(i, buffer_serie) ){
                               pos_final[2] = i; //posicion final del valor del tercer parametro +1
@@ -287,7 +366,7 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
       Serial.print(ki_l);
       Serial.print("; td_l=");
       Serial.print(td_l);
-      Serial.println(";");
+      Serial.println(';');
     } else {
       aux = buffer_serie.substring(pos_inic[0], pos_final[0]);
       kp_r = aux.toFloat();
@@ -301,11 +380,13 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
       Serial.print(ki_r);
       Serial.print("; td_r=");
       Serial.print(td_r);
-      Serial.println(";");
+      Serial.println(';');
     }
-  } else {
-    Serial.println("Error: el formato correcto es \"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\"");
-  }
+  } //else {
+    //Serial.println("Error: el formato correcto es \"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\"");
+  //}
+  
+  return (flag_correcto);
 }
 
 
@@ -314,7 +395,6 @@ void ParserParametrosPID(String& buffer_serie, float& kp_l, float& ki_l, float& 
 boolean ControlParteFrac(unsigned int& i, String& buffer_serie){
   boolean flag_error = false;
   
-  i += 7;
   while ( flag_error==false && buffer_serie[i]!=';' ){
     if ( buffer_serie[i]<'0' && buffer_serie[i]>'9' )   flag_error = true;
     i++;
@@ -367,7 +447,7 @@ inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int 
 }
 
 
-inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
+inline float ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
   //Variables relacionadas con el lazo de control L
   float y; //velocidad lineal sensada (m/s)
   float e; //error de velocidad (m/s)
@@ -402,10 +482,12 @@ inline void ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
     integral1 = integral;
     deriv1 = deriv;
   }
+
+  return y;
 }
 
 
-inline void ControlMotorRight(float r){
+inline float ControlMotorRight(float r){
   //Variables relacionadas con el lazo de control R
   float y; //velocidad lineal sensada (m/s)
   float e; //error de velocidad (m/s)
@@ -440,6 +522,8 @@ inline void ControlMotorRight(float r){
     integral1 = integral;  
     deriv1 = deriv;
   }
+
+  return y;
 }
 
 
