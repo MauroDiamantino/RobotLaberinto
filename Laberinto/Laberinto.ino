@@ -6,6 +6,7 @@
 #include <PinChangeInterruptSettings.h>
 
 #define DEBUG 1
+#define LAZO_A_CALIBRAR 'L' //debe ser 'R' o 'L'
 
 ////////////Pines////////////////////
 const byte PIN_ENCODER_LEFT1 = 4;
@@ -21,6 +22,9 @@ const byte PIN_EXCITADOR_ONOFF = 12;
 struct RespuestaControlador{
   float y;  //Valor obtenido del sensor de la variable de salida
   float u;  //Accion de control generada a partir del error y aplicada a la planta
+  float prop; //Parte proporcional de la accion de control
+  float integral; //Parte integral de la accion de control
+  float deriv; //Parte derivativa de la accion de control
 };
 
 //Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para
@@ -45,7 +49,7 @@ const unsigned int NUM_FLANCOS_VUELTA = 288; //Cantidad de flancos efectivos de 
                                             //flancos por vuelta que producen interrupciones. Esto depende de la configuracion de las interrupciones del micro.
 const float ZONA_MUERTA_R = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
 const float ZONA_MUERTA_L = 4.0; //Zona muerta del motor derecho (en volts), solo considerando tensiones positivas. En realidad la zona muerta es ±4v.
-const float TOLERANCIA = 0.01; //Tolerancia para el control de la velocidad de las ruedas, 0.01m/s. Este valor debería ser definido considerando que el hecho de
+//const float TOLERANCIA = 0.01; //Tolerancia para el control de la velocidad de las ruedas, 0.01m/s. Este valor debería ser definido considerando que el hecho de
                               //que exista una diferencia en las velocidades de las ruedas producira una desviacion lateral (giro) del robot mientras este
                               //intenta moverse en linea recta, lo cual podria producir el impacto del mismo contra las paredes del laberinto si el
                               //valor no es elegido correctamente.
@@ -84,10 +88,10 @@ volatile bool flag_parser = false; //Se declara "volatile" siguiendo las recomen
 void setup(){
   
   //Configuración del modo de funcionamiento de los pines
-  pinMode(PIN_ENCODER_LEFT1, INPUT_PULLUP);
-  pinMode(PIN_ENCODER_LEFT2, INPUT_PULLUP);
-  pinMode(PIN_ENCODER_RIGHT1, INPUT_PULLUP);
-  pinMode(PIN_ENCODER_RIGHT2, INPUT_PULLUP);
+  pinMode(PIN_ENCODER_LEFT1, INPUT);
+  pinMode(PIN_ENCODER_LEFT2, INPUT);
+  pinMode(PIN_ENCODER_RIGHT1, INPUT);
+  pinMode(PIN_ENCODER_RIGHT2, INPUT);
   pinMode(PIN1_MOTOR_LEFT, OUTPUT);
   pinMode(PIN2_MOTOR_LEFT, OUTPUT);
   pinMode(PIN1_MOTOR_RIGHT, OUTPUT);
@@ -121,24 +125,41 @@ void setup(){
 
 ///////////////////////////////////////////////LOOP////////////////////////////////////////////////////////////////////////////////////////////////////
 void loop(){
-  RespuestaControlador respControladorL = {0.0,0.0};
-  RespuestaControlador respControladorR = {0.0,0.0};
+  RespuestaControlador respControladorL = {0.0,0.0,0.0,0.0,0.0};
+  RespuestaControlador respControladorR = {0.0,0.0,0.0,0.0,0.0};
   
   if (flag_control == true){
     respControladorL = ControlMotorLeft(r_left);
     respControladorR = ControlMotorRight(r_right);
     
-    //Se envian por el puerto serie las muestras de las velocidades reales para evaluar la evolucion de las mismas en MatLab y así poder calibrar los PIDs.
-    //Ademas se envian las muestras de las referencias.
 #if DEBUG
-    Serial.print("r_l=");
+    //Se envian por el puerto serie diferentes variables de interes para evualuar en forma visual el desempeño de los controladores.
+    Serial.print(" r_l=");
     Serial.print(r_left);
     Serial.print(" tot_flan_l=");
     Serial.print(total_flancos_left);
-    Serial.print("; y_l=");
+    Serial.print(" y_l=");
     Serial.print(respControladorL.y);
-    Serial.print("; u_l=");
+    Serial.print(" u_l=");
+    Serial.println(respControladorL.u);
+#else
+    //Se envian por el puerto serie las muestras de las velocidades reales para evaluar la evolucion de las mismas en MatLab y así poder calibrar los PIDs.
+    //Ademas se envian las muestras de las referencias, la accion de control total y las distancias componentes de la misma.
+  #if LAZO_A_CALIBRAR=='L'
+    Serial.print(r_left);
+    Serial.print(respControladorL.y);
     Serial.print(respControladorL.u);
+    Serial.print(respControladorL.prop);
+    Serial.print(respControladorL.integral);
+    Serial.print(respControladorL.deriv);
+  #else
+    Serial.print(r_right);
+    Serial.print(respControladorR.y);
+    Serial.print(respControladorR.u);
+    Serial.print(respControladorR.prop);
+    Serial.print(respControladorR.integral);
+    Serial.print(respControladorR.deriv);
+  #endif
 #endif
 
     flag_control = false;
@@ -164,13 +185,20 @@ void loop(){
       buffer_serie.reserve(aux);
       buffer_serie = Serial.readStringUntil('\n');
       buffer_serie.toLowerCase();
-      
-      if ( !ParserVelocidad(buffer_serie, r_left, r_right) ){
-        if ( !ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r) ){
+
+      bool aux;
+      aux = ParserVelocidad(buffer_serie, r_left, r_right);
+      if ( !aux ){
+        aux = ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r);
+        
+#if DEBUG
+        if ( !aux ){
           Serial.println("El formato del string recibido no se corresponde con ninguno de los formatos esperados:");
           Serial.println("\t\"vel_l=x.xx; vel_r=x.xx;\"");
           Serial.println("\t\"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\"");
         }
+#endif
+        
       }
       buffer_serie = ""; //Se borra el contenido del buffer
     }
@@ -487,10 +515,6 @@ inline void Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int 
     digitalWrite(PIN2_MOTOR, LOW);
     analogWrite(PIN1_MOTOR,  salidaPWM);
   }
-#if DEBUG
-  Serial.print("SalidaPWM=");
-  Serial.println(salidaPWM);
-#endif
 }
 
 
@@ -502,6 +526,7 @@ inline RespuestaControlador ControlMotorLeft(float r){ //r: velocidad lineal de 
            //se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
+  float prop; ////termino derivativo de la ecuacion del PID
   static float y1 = 0.0, e1 = 0.0; //y1 = y(k-1); e1=e(k-1);
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   RespuestaControlador respControlador;
@@ -514,24 +539,20 @@ inline RespuestaControlador ControlMotorLeft(float r){ //r: velocidad lineal de 
   //Calculo del error
   e = r - y;
 #if DEBUG
-  Serial.print("; e=");
+  Serial.print(" e_l=");
+  Serial.print(e);
 #endif
 
-  if (abs(e) > TOLERANCIA){
-    //Calculo de la accion de control del lazo L, siguiendo la estructura de un PID modificado de modo que la accion derivativa se
-    //genera a partir de la salida de lazo (y). Ademas se implementa un filtro pasa-bajo en cascada con la accion derivativa.
-    //Termino integrativo
-    integral = integral1 + kp_l*ki_l*INT_MUESTREO*(e + e1)/2.0;
-    //Termino derivativo (se implementa con un filtro pasa-bajo en cascada)
-    deriv = td_l/(N*INT_MUESTREO + td_l) * (deriv1 - kp_l*N*(y - y1));
-    //Accion de control total
-    u = kp_l*e + integral + deriv;
-    
-  }else{
-    deriv = td_l/(N*INT_MUESTREO + td_l) * (deriv1 - kp_l*N*(y - y1));
-    integral = 0.0;
-    u = 0.0;
-  }
+  //Calculo de la accion de control del lazo L, siguiendo la estructura de un PID modificado de modo que la accion derivativa se
+  //genera a partir de la salida de lazo (y). Ademas se implementa un filtro pasa-bajo en cascada con la accion derivativa.
+  //Termino integrativo
+  integral = integral1 + kp_l*ki_l*INT_MUESTREO*(e + e1)/2.0;
+  //Termino derivativo (se implementa con un filtro pasa-bajo en cascada)
+  deriv = td_l/(N*INT_MUESTREO + td_l) * (deriv1 - kp_l*N*(y - y1));
+  //Termino proporcional
+  prop = kp_l*e;
+  //Accion de control total
+  u = prop + integral + deriv;
 
   //Aplicacion de la señal de control generada por el PID
   Actuador(u, PIN1_MOTOR_LEFT, PIN2_MOTOR_LEFT, ZONA_MUERTA_L);
@@ -545,6 +566,9 @@ inline RespuestaControlador ControlMotorLeft(float r){ //r: velocidad lineal de 
   //Se retorna el valor medido de la salida del lazo y la accion de control para que sean graficados
   respControlador.y = y;
   respControlador.u = u;
+  respControlador.prop = prop;
+  respControlador.integral = integral;
+  respControlador.deriv = deriv;
   return respControlador;
 }
 
@@ -557,6 +581,7 @@ inline RespuestaControlador ControlMotorRight(float r){
           //como una señal PWM que se aplica al driver del motor
   float integral; //termino integral de la ecuacion del PID
   float deriv; //termino derivativo de la ecuacion del PID
+  float prop; ////termino derivativo de la ecuacion del PID
   static float y1 = 0.0, e1 = 0.0; //y1 = y(k-1); e1=e(k-1);
   static float integral1 = 0.0, deriv1 = 0.0; //integral1 = integral(k-1); deriv1 = deriv(k-1)
   RespuestaControlador respControlador;
@@ -568,25 +593,17 @@ inline RespuestaControlador ControlMotorRight(float r){
 
   //Calculo del error
   e = r - y;
-#if DEBUG
-  Serial.print("; e=");
-#endif
 
-  if (abs(e) > TOLERANCIA){
-    //Calculo de la accion de control del lazo R, siguiendo la estructura de un PID modificado de modo que la accion derivativa se
-    //genera a partir de la salida de lazo (y). Ademas se implementa un filtro pasa-bajo en cascada con la accion derivativa.
-    //Termino integrativo
-    integral = integral1 + kp_r*ki_r*INT_MUESTREO*(e + e1)/2.0;
-    //Termino derivativo (se implementa con un filtro pasa-bajo en cascada)
-    deriv = td_r/(N*INT_MUESTREO + td_r) * (deriv1 - kp_r*N*(y - y1));
-    //Accion de control total
-    u = kp_r*e + integral + deriv;
-    
-  }else{
-    deriv = td_r/(N*INT_MUESTREO + td_r) * (deriv1 - kp_r*N*(y - y1));
-    integral = 0.0;
-    u = 0.0;
-  }
+  //Calculo de la accion de control del lazo R, siguiendo la estructura de un PID modificado de modo que la accion derivativa se
+  //genera a partir de la salida de lazo (y). Ademas se implementa un filtro pasa-bajo en cascada con la accion derivativa.
+  //Termino integrativo
+  integral = integral1 + kp_r*ki_r*INT_MUESTREO*(e + e1)/2.0;
+  //Termino derivativo (se implementa con un filtro pasa-bajo en cascada)
+  deriv = td_r/(N*INT_MUESTREO + td_r) * (deriv1 - kp_r*N*(y - y1));
+  //Termino proporcional
+  prop = kp_l*e;
+  //Accion de control total
+  u = prop + integral + deriv;
 
   //Aplicacion de la señal de control generada por el PID
   Actuador(u, PIN1_MOTOR_RIGHT, PIN2_MOTOR_RIGHT, ZONA_MUERTA_R);
@@ -600,6 +617,9 @@ inline RespuestaControlador ControlMotorRight(float r){
   //Se retorna el valor medido de la salida del lazo y la accion de control para que sean graficados
   respControlador.y = y;
   respControlador.y = u;
+  respControlador.prop = prop;
+  respControlador.integral = integral;
+  respControlador.deriv = deriv;
   return respControlador;
 }
 
