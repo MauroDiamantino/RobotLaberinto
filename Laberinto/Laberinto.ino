@@ -127,6 +127,7 @@ void setup(){
 void loop(){
   RespuestaControlador respControladorL = {0.0,0.0,0.0,0.0,0.0};
   RespuestaControlador respControladorR = {0.0,0.0,0.0,0.0,0.0};
+  char bufferOut[100];
   
   if (flag_control == true){
     respControladorL = ControlMotorLeft(r_left);
@@ -146,19 +147,25 @@ void loop(){
     //Se envian por el puerto serie las muestras de las velocidades reales para evaluar la evolucion de las mismas en MatLab y así poder calibrar los PIDs.
     //Ademas se envian las muestras de las referencias, la accion de control total y las distancias componentes de la misma.
   #if LAZO_A_CALIBRAR=='L'
-    Serial.print(r_left);
-    Serial.print(respControladorL.y);
-    Serial.print(respControladorL.u);
-    Serial.print(respControladorL.prop);
-    Serial.print(respControladorL.integral);
-    Serial.print(respControladorL.deriv);
+    sprintf(bufferOut,"%d,%d,%d,%d,%d,%d",int(100*r_left),int(100*respControladorL.y),int(100*respControladorL.u), _
+      int(100*respControladorL.prop), int(100*respControladorL.integral),int(100*respControladorL.deriv));
+    Serial.println(bufferOut);
+//    Serial.print(r_left);
+//    Serial.print(respControladorL.y);
+//    Serial.print(respControladorL.u);
+//    Serial.print(respControladorL.prop);
+//    Serial.print(respControladorL.integral);
+//    Serial.print(respControladorL.deriv);
   #else
-    Serial.print(r_right);
-    Serial.print(respControladorR.y);
-    Serial.print(respControladorR.u);
-    Serial.print(respControladorR.prop);
-    Serial.print(respControladorR.integral);
-    Serial.print(respControladorR.deriv);
+    sprintf(bufferOut,"%d,%d,%d,%d,%d,%d",int(100*r_right),int(100*respControladorR.y),int(100*respControladorR.u), _
+      int(100*respControladorR.prop), int(100*respControladorR.integral),int(100*respControladorR.deriv));
+    Serial.println(bufferOut);
+//    Serial.print(r_right);
+//    Serial.print(respControladorR.y);
+//    Serial.print(respControladorR.u);
+//    Serial.print(respControladorR.prop);
+//    Serial.print(respControladorR.integral);
+//    Serial.print(respControladorR.deriv);
   #endif
 #endif
 
