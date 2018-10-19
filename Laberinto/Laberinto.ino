@@ -5,7 +5,7 @@
 #include <PinChangeInterruptPins.h>
 #include <PinChangeInterruptSettings.h>
 
-#define DEBUG 0
+#define DEBUG 1
 #define LAZO_A_CALIBRAR 'L' //debe ser 'R' o 'L'
 
 ////////////Pines////////////////////
@@ -18,22 +18,6 @@ const byte PIN2_MOTOR_LEFT = 10;//6
 const byte PIN1_MOTOR_RIGHT = 5;
 const byte PIN2_MOTOR_RIGHT = 6;
 const byte PIN_EXCITADOR_ONOFF = 12;
-
-struct RespuestaControlador{
-  float y;  //Valor obtenido del sensor de la variable de salida
-  float u_p;  //Accion de control generada a partir del error y aplicada a la planta
-  float prop; //Parte proporcional de la accion de control
-  float integral; //Parte integral de la accion de control
-  float deriv; //Parte derivativa de la accion de control
-};
-
-//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para
-//forzar al compilador a respetar esta directiva.
-inline void Excitador(float&, float&) __attribute__((always_inline));
-inline float CalcVelLineal() __attribute__((always_inline));
-inline float Actuador(float, const unsigned int, const unsigned int) __attribute__((always_inline));
-inline RespuestaControlador ControlMotorLeft(float) __attribute__((always_inline));
-inline RespuestaControlador ControlMotorRight(float) __attribute__((always_inline));
 
 //////////////////////////////////////////CONSTANTES//////////////////////////////////////////////////////////////////////////////////////////////////
 //const float PI = 3.14; //Es innecesario definir esta constante porque ya esta predefinida
@@ -58,6 +42,22 @@ const float VEL_LIN_MAX = 1.0; //Velocidad lineal maxima (m/s) permitida para am
 const float VEL_LIN_MIN = 0.14; //Velocidad lineal minima (m/s) permitida para ambos motores.
 const float RADIO_RUEDA = 0.03; //Radio de la ruedas en metros. Este es de 3cm, es decir 0.03m.
 const unsigned int PERIODO_CAPT = (unsigned int) 30/(1000*INT_MUESTREO); //Periodo de captura de muestras de distintas variables a graficar en Simulink. En ms.
+
+struct RespuestaControlador{
+  float y;  //Valor obtenido del sensor de la variable de salida
+  float u_p;  //Accion de control generada a partir del error y aplicada a la planta
+  float prop; //Parte proporcional de la accion de control
+  float integral; //Parte integral de la accion de control
+  float deriv; //Parte derivativa de la accion de control
+};
+
+//Declaraciones de los prototipos de las funciones con la directiva "inline", a las que se les asigna un atributo para
+//forzar al compilador a respetar esta directiva.
+inline void Excitador(float&, float&) __attribute__((always_inline));
+inline float CalcVelLineal() __attribute__((always_inline));
+inline float Actuador(float, const unsigned int, const unsigned int) __attribute__((always_inline));
+inline RespuestaControlador ControlMotorLeft(float) __attribute__((always_inline));
+inline RespuestaControlador ControlMotorRight(float) __attribute__((always_inline));
 
 //////////////////////////////////////////VARIABLES GLOBALES//////////////////////////////////////////////////////////////////////////////////////////
 //Contadores de los flancos efectivos (aquellos que producen interrupciones) de los encoder.
@@ -151,14 +151,25 @@ void loop(){
     respControladorR = ControlMotorRight(r_right);
 #if DEBUG==1
     //Se envian por el puerto serie diferentes variables de interes para evualuar en forma visual el desempeño de los controladores.
-    Serial.print(" r_l=");
-    Serial.print(r_left);
-    Serial.print(" tot_flan_l=");
-    Serial.print(total_flancos_left);
-    Serial.print(" y_l=");
-    Serial.print(respControladorL.y);
-    Serial.print(" u_pl=");
-    Serial.println(respControladorL.u_p);
+    #if LAZO_A_CALIBRAR=='L'
+      Serial.print(" r_l=");
+      Serial.print(r_left);
+      Serial.print(" tot_flan_l=");
+      Serial.print(total_flancos_left);
+      Serial.print(" y_l=");
+      Serial.print(respControladorL.y);
+      Serial.print(" u_pl=");
+      Serial.println(respControladorL.u_p);
+    #else
+      Serial.print(" r_r=");
+      Serial.print(r_right);
+      Serial.print(" tot_flan_r=");
+      Serial.print(total_flancos_right);
+      Serial.print(" y_r=");
+      Serial.print(respControladorR.y);
+      Serial.print(" u_pr=");
+      Serial.println(respControladorR.u_p);
+    #endif
 #endif
    
     flag_control = false;
@@ -219,7 +230,7 @@ void loop(){
       buffer_serie.toLowerCase();
    
 #if DEBUG
-      if ( !ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r); ){
+      if ( !ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r) ){
         Serial.println("El formato del string recibido no cumple con el formato esperado:");
         Serial.println("\t\"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\\n\"");
       }
