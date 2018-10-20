@@ -9,12 +9,12 @@
 #define LAZO_A_CALIBRAR 'L' //debe ser 'R' o 'L'
 
 ////////////Pines////////////////////
-const byte PIN_ENCODER_LEFT1 = A6;//4
-const byte PIN_ENCODER_LEFT2 = A7;//7
+const byte PIN_ENCODER_LEFT1 = A0;
+const byte PIN_ENCODER_LEFT2 = A1;
 const byte PIN_ENCODER_RIGHT1 = 4;
 const byte PIN_ENCODER_RIGHT2 = 7;
-const byte PIN1_MOTOR_LEFT = 9;//5
-const byte PIN2_MOTOR_LEFT = 10;//6
+const byte PIN1_MOTOR_LEFT = 9;
+const byte PIN2_MOTOR_LEFT = 10;
 const byte PIN1_MOTOR_RIGHT = 5;
 const byte PIN2_MOTOR_RIGHT = 6;
 const byte PIN_EXCITADOR_ONOFF = 12;
@@ -149,6 +149,7 @@ void loop(){
   if (flag_control == true){
     respControladorL = ControlMotorLeft(r_left);
     respControladorR = ControlMotorRight(r_right);
+    
 #if DEBUG==1
     //Se envian por el puerto serie diferentes variables de interes para evualuar en forma visual el desempeño de los controladores.
     #if LAZO_A_CALIBRAR=='L'
@@ -229,19 +230,21 @@ void loop(){
       buffer_serie = Serial.readStringUntil('\n');
       buffer_serie.toLowerCase();
    
-#if DEBUG
+#if DEBUG==1
       if ( !ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r) ){
         Serial.println("El formato del string recibido no cumple con el formato esperado:");
         Serial.println("\t\"kp_x=x.xx; ki_x=x.xx; td_x=x.xx;\\n\"");
       }
-#else
-      ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r);
-#endif    
       buffer_serie = ""; //Se borra el contenido del buffer
+#else
+      //ParserParametrosPID(buffer_serie, kp_l, ki_l, td_l, kp_r, ki_r, td_r);
+#endif    
+      //buffer_serie = ""; //Se borra el contenido del buffer
     }
     flag_parser = false;
   }
 
+#if DEBUG==0
   //*************************************************************************************
   //*************** EVENTO DETECCION DE TRAMA   *************************************
   //*************************************************************************************
@@ -279,6 +282,7 @@ void loop(){
     Serial.write(0);       //fin trama
     evento_tx = 0;
   }
+#endif
 }
 
 /////////////////////////////////////////////////////////RUTINAS DE SERVICIO////////////////////////////////////////////////////////////////////////////
@@ -527,13 +531,13 @@ inline float Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int
             //PWM son de 8-bit en el Arduino Nano.
   
   if (u >= 0.0){ //voltaje medio de alimentacion del motor positivo
-    if (u !=0.0 ){  u = abs(u) + ZONA_MUERTA; }
+    if (u !=0.0 ){  u += ZONA_MUERTA; }
     if (u > TENSION_MAX){ u = TENSION_MAX;  }
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     salidaPWM = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
     //Aplicacion de la accion de control (PWM)
     digitalWrite(PIN1_MOTOR, LOW);
-    analogWrite(PIN2_MOTOR,  salidaPWM);
+    analogWrite(PIN2_MOTOR, salidaPWM);
     return u;
   } else { //voltaje medio de alimentacion del motor negativo
     u = abs(u) + ZONA_MUERTA;
@@ -541,8 +545,8 @@ inline float Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int
     //Mapeo de la accion de control (voltaje) a PWM de 8 bits
     salidaPWM = (byte)( (u/TENSION_MAX)*255.0 ); //representa el duty de la señal PWM
     //Aplicacion de la accion de control (PWM)
+    analogWrite(PIN1_MOTOR, salidaPWM);
     digitalWrite(PIN2_MOTOR, LOW);
-    analogWrite(PIN1_MOTOR,  salidaPWM);
     return (-u);
   }
 }
@@ -550,7 +554,7 @@ inline float Actuador(float u, const unsigned int PIN1_MOTOR, const unsigned int
 
 inline RespuestaControlador ControlMotorLeft(float r){ //r: velocidad lineal de referencia (m/s)
   //Constantes
-  const float KB = 1.0;
+  const float KB = 0.1;
   const byte N = 2; //Razon entre la constante de tiempo de la accion derivativa y la constante de tiempo del filtro en cascada.
   const byte N_filt = 10;
   //Variables del lazo de control L
@@ -743,6 +747,7 @@ void setPwmFrequency(int pin, int divisor){
   }
 }
 
+#if DEBUG==0
 //*************************************************************************************
 //********** SERVICIO DE INTERRUPCION  ISR(SERIAL_RX)   *********************
 //*************************************************************************************
@@ -788,6 +793,7 @@ void serialEvent() {
     }
   }
 }//--END serialEvent()-------------- -------------------------
+#endif
 
 //Referencias
 //[1] https://www.arduino.cc/reference/en/language/functions/external-interrupts/attachinterrupt/
